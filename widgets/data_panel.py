@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QCheckBox,
     QSizePolicy,
+    QComboBox,
 )
 
 
@@ -25,14 +26,16 @@ class DataPanel(QWidget):
 
     import_standard_scanbody_requested = Signal()
     import_standard_abutment_requested = Signal()
+    import_roi_json_requested = Signal()
     import_oral_scanbody_requested = Signal()
     import_gingiva_requested = Signal()
 
     run_matching_requested = Signal()
     run_cuff_requested = Signal()
     run_design_requested = Signal()
-    export_requested = Signal()
 
+    export_requested = Signal()
+    cuff_display_type_changed = Signal(str)
     toggle_visibility_requested = Signal(str)
 
     def __init__(self, parent=None):
@@ -65,6 +68,11 @@ class DataPanel(QWidget):
             title="标准基台模型",
             signal_name="import_standard_abutment_requested",
             key="standard_abutment"
+        ))
+        layout.addWidget(self._create_import_row(
+            title="ROI 索引文件",
+            signal_name="import_roi_json_requested",
+            key="roi_indices_json"
         ))
         layout.addWidget(self._create_import_row(
             title="口扫扫描杆模型",
@@ -157,7 +165,40 @@ class DataPanel(QWidget):
             layout.addWidget(checkbox)
             self.visibility_checkboxes[key] = checkbox
 
+        # 新增：袖口边界显示类型切换
+        mode_label = QLabel("袖口边界显示")
+        self.cuff_display_type_combo = QComboBox()
+        self.cuff_display_type_combo.addItem("参考边界", "reference_boundary")
+        self.cuff_display_type_combo.addItem("原始边界", "raw_boundary")
+        self.cuff_display_type_combo.setCurrentIndex(0)
+        self.cuff_display_type_combo.currentIndexChanged.connect(self._emit_cuff_display_type_changed)
+
+        layout.addSpacing(8)
+        layout.addWidget(mode_label)
+        layout.addWidget(self.cuff_display_type_combo)
+
         return group
+
+    def _emit_cuff_display_type_changed(self):
+        if hasattr(self, "cuff_display_type_combo"):
+            self.cuff_display_type_changed.emit(self.cuff_display_type_combo.currentData())
+
+    def get_cuff_display_type(self) -> str:
+        if hasattr(self, "cuff_display_type_combo"):
+            return self.cuff_display_type_combo.currentData()
+        return "reference_boundary"
+
+    def set_cuff_display_type(self, value: str):
+        if not hasattr(self, "cuff_display_type_combo"):
+            return
+
+        index = self.cuff_display_type_combo.findData(value)
+        if index < 0:
+            return
+
+        old = self.cuff_display_type_combo.blockSignals(True)
+        self.cuff_display_type_combo.setCurrentIndex(index)
+        self.cuff_display_type_combo.blockSignals(old)
 
     def update_file_status(self, key: str, file_path: str):
         """

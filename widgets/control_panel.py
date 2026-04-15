@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QCheckBox,
     QTabWidget,
+    QComboBox,
 )
 
 
@@ -33,6 +34,9 @@ class ControlPanel(QWidget):
 
         root_layout.addWidget(self.tab_widget)
 
+    # ============================================================
+    # 扫描杆匹配参数
+    # ============================================================
     def _build_scanbody_tab(self):
         widget = QWidget()
         layout = QVBoxLayout(widget)
@@ -66,34 +70,76 @@ class ControlPanel(QWidget):
         layout.addStretch(1)
         return widget
 
+    # ============================================================
+    # 袖口识别 / 边界重建参数
+    # ============================================================
     def _build_cuff_tab(self):
         widget = QWidget()
         layout = QVBoxLayout(widget)
 
-        group = QGroupBox("袖口识别 / 边界定位参数")
+        group = QGroupBox("袖口边缘提取与参考边界重建参数")
         form = QFormLayout(group)
 
-        self.cuff_patch_radius = QDoubleSpinBox()
-        self.cuff_patch_radius.setRange(0.5, 20.0)
-        self.cuff_patch_radius.setDecimals(2)
-        self.cuff_patch_radius.setValue(5.0)
+        self.cuff_loop_select_mode = QComboBox()
+        self.cuff_loop_select_mode.addItems(["longest", "manual"])
+        self.cuff_loop_select_mode.setCurrentText("longest")
 
-        self.cuff_boundary_bandwidth = QDoubleSpinBox()
-        self.cuff_boundary_bandwidth.setRange(0.01, 5.0)
-        self.cuff_boundary_bandwidth.setDecimals(3)
-        self.cuff_boundary_bandwidth.setValue(0.50)
+        self.cuff_target_loop_id = QSpinBox()
+        self.cuff_target_loop_id.setRange(0, 100)
+        self.cuff_target_loop_id.setValue(0)
+        self.cuff_target_loop_id.setEnabled(False)
 
-        self.cuff_use_boundary_refine = QCheckBox("启用边界后处理")
-        self.cuff_use_boundary_refine.setChecked(True)
+        self.cuff_reference_num_samples = QSpinBox()
+        self.cuff_reference_num_samples.setRange(20, 5000)
+        self.cuff_reference_num_samples.setValue(240)
 
-        form.addRow("局部分析半径", self.cuff_patch_radius)
-        form.addRow("边界带宽参数", self.cuff_boundary_bandwidth)
-        form.addRow("", self.cuff_use_boundary_refine)
+        self.cuff_reference_smooth_factor = QDoubleSpinBox()
+        self.cuff_reference_smooth_factor.setRange(0.0, 10.0)
+        self.cuff_reference_smooth_factor.setDecimals(3)
+        self.cuff_reference_smooth_factor.setValue(0.6)
+
+        self.cuff_reference_spline_degree = QSpinBox()
+        self.cuff_reference_spline_degree.setRange(1, 5)
+        self.cuff_reference_spline_degree.setValue(3)
+
+        self.cuff_display_offset = QDoubleSpinBox()
+        self.cuff_display_offset.setRange(0.0, 5.0)
+        self.cuff_display_offset.setDecimals(3)
+        self.cuff_display_offset.setValue(0.05)
+
+        # 新增：界面显示结果类型
+        self.cuff_display_result_type = QComboBox()
+        self.cuff_display_result_type.addItems([
+            "reference_boundary",
+            "raw_boundary",
+        ])
+        self.cuff_display_result_type.setCurrentText("reference_boundary")
+
+        self.cuff_save_outputs = QCheckBox("保存边界点与参考边界文件")
+        self.cuff_save_outputs.setChecked(True)
+
+        form.addRow("边界环选择方式", self.cuff_loop_select_mode)
+        form.addRow("手动边界环编号", self.cuff_target_loop_id)
+        form.addRow("参考边界采样点数", self.cuff_reference_num_samples)
+        form.addRow("平滑因子", self.cuff_reference_smooth_factor)
+        form.addRow("样条阶数", self.cuff_reference_spline_degree)
+        form.addRow("显示抬升偏移", self.cuff_display_offset)
+        form.addRow("界面显示结果", self.cuff_display_result_type)
+        form.addRow("", self.cuff_save_outputs)
 
         layout.addWidget(group)
         layout.addStretch(1)
+
+        self.cuff_loop_select_mode.currentTextChanged.connect(self._on_cuff_mode_changed)
+
         return widget
 
+    def _on_cuff_mode_changed(self, text: str):
+        self.cuff_target_loop_id.setEnabled(text == "manual")
+
+    # ============================================================
+    # 基台生成参数
+    # ============================================================
     def _build_design_tab(self):
         widget = QWidget()
         layout = QVBoxLayout(widget)
@@ -128,6 +174,9 @@ class ControlPanel(QWidget):
         layout.addStretch(1)
         return widget
 
+    # ============================================================
+    # 参数读取接口
+    # ============================================================
     def get_scanbody_match_params(self):
         return {
             "voxel_size": self.match_voxel_size.value(),
@@ -138,9 +187,14 @@ class ControlPanel(QWidget):
 
     def get_cuff_params(self):
         return {
-            "patch_radius": self.cuff_patch_radius.value(),
-            "boundary_bandwidth": self.cuff_boundary_bandwidth.value(),
-            "use_boundary_refine": self.cuff_use_boundary_refine.isChecked(),
+            "loop_select_mode": self.cuff_loop_select_mode.currentText(),
+            "target_loop_id": self.cuff_target_loop_id.value(),
+            "reference_num_samples": self.cuff_reference_num_samples.value(),
+            "reference_smooth_factor": self.cuff_reference_smooth_factor.value(),
+            "reference_spline_degree": self.cuff_reference_spline_degree.value(),
+            "display_offset_on_gingiva": self.cuff_display_offset.value(),
+            "display_result_type": self.cuff_display_result_type.currentText(),
+            "save_outputs": self.cuff_save_outputs.isChecked(),
         }
 
     def get_abutment_design_params(self):

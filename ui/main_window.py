@@ -49,7 +49,7 @@ class MainWindow(QMainWindow):
         self.case_data = {
             "standard_scanbody": None,
             "standard_abutment": None,
-
+            "roi_indices_json": None,
             # 原始输入
             "oral_scanbody_raw": None,
             "gingiva_mesh_raw": None,
@@ -63,6 +63,7 @@ class MainWindow(QMainWindow):
             "match_result": None,
             "cuff_result": None,
             "abutment_result": None,
+            "cuff_display_type": "reference_boundary",
         }
 
         # 初始化算法模块（当前为占位实现）
@@ -132,6 +133,7 @@ class MainWindow(QMainWindow):
         file_menu = menu_bar.addMenu("文件")
         action_import_std_scanbody = QAction("导入标准扫描杆模型", self)
         action_import_std_abutment = QAction("导入标准基台模型", self)
+        action_import_roi_json = QAction("导入ROI索引文件", self)
         action_import_oral_scanbody = QAction("导入口扫扫描杆模型", self)
         action_import_gingiva = QAction("导入完整牙龈模型", self)
         action_import_cuff = QAction("导入袖口相关数据", self)
@@ -140,6 +142,7 @@ class MainWindow(QMainWindow):
 
         file_menu.addAction(action_import_std_scanbody)
         file_menu.addAction(action_import_std_abutment)
+        file_menu.addAction(action_import_roi_json)
         file_menu.addAction(action_import_oral_scanbody)
         file_menu.addAction(action_import_gingiva)
         file_menu.addAction(action_import_cuff)
@@ -183,6 +186,7 @@ class MainWindow(QMainWindow):
         self.menu_actions = {
             "import_std_scanbody": action_import_std_scanbody,
             "import_std_abutment": action_import_std_abutment,
+            "import_roi_json": action_import_roi_json,
             "import_oral_scanbody": action_import_oral_scanbody,
             "import_gingiva": action_import_gingiva,
             "export_result": action_export_result,
@@ -212,6 +216,11 @@ class MainWindow(QMainWindow):
         self.menu_actions["import_std_abutment"].triggered.connect(
             lambda: self.import_model("standard_abutment", "导入标准基台模型")
         )
+
+        self.menu_actions["import_roi_json"].triggered.connect(
+            lambda: self.import_model("roi_indices_json", "导入 ROI 索引文件")
+        )
+
         self.menu_actions["import_oral_scanbody"].triggered.connect(
             lambda: self.import_model("oral_scanbody", "导入口扫扫描杆模型")
         )
@@ -249,6 +258,9 @@ class MainWindow(QMainWindow):
         self.data_panel.import_standard_abutment_requested.connect(
             lambda: self.import_model("standard_abutment", "导入标准基台模型")
         )
+        self.data_panel.import_roi_json_requested.connect(
+            lambda: self.import_model("roi_indices_json", "导入 ROI 索引文件")
+        )
         self.data_panel.import_oral_scanbody_requested.connect(
             lambda: self.import_model("oral_scanbody", "导入口扫扫描杆模型")
         )
@@ -262,6 +274,7 @@ class MainWindow(QMainWindow):
         self.data_panel.export_requested.connect(self.export_result_model)
 
         self.data_panel.toggle_visibility_requested.connect(self.toggle_model_visibility)
+        self.data_panel.cuff_display_type_changed.connect(self.on_cuff_display_type_changed)
 
     def _load_internal_cuff_model(self):
         cuff_path = str(INTERNAL_CUFF_MODEL_PATH)
@@ -284,17 +297,25 @@ class MainWindow(QMainWindow):
     # =========================
     @Slot()
     def import_model(self, key: str, title: str):
-        file_path, _ = QFileDialog.getOpenFileName(
-            self,
-            title,
-            "",
-            "3D Files (*.ply *.stl *.obj *.off *.pcd *.txt);;All Files (*)"
-        )
+        if key == "roi_indices_json":
+            file_path, _ = QFileDialog.getOpenFileName(
+                self,
+                title,
+                "",
+                "JSON Files (*.json);;All Files (*)"
+            )
+        else:
+            file_path, _ = QFileDialog.getOpenFileName(
+                self,
+                title,
+                "",
+                "3D Files (*.ply *.stl *.obj *.off *.pcd *.txt);;All Files (*)"
+            )
+
         if not file_path:
             return
 
-        # 标准模型直接存
-        if key in ["standard_scanbody", "standard_abutment"]:
+        if key in ["standard_scanbody", "standard_abutment", "roi_indices_json"]:
             self.case_data[key] = file_path
 
         # 患者扫描数据同时保存 raw 与当前工作数据
@@ -312,7 +333,10 @@ class MainWindow(QMainWindow):
             self.case_data["gingiva_mesh"] = file_path
 
         self.data_panel.update_file_status(key, file_path)
-        self.viewer_panel.load_model(key, file_path)
+
+        # 只有 3D 模型才进 viewer
+        if key != "roi_indices_json":
+            self.viewer_panel.load_model(key, file_path)
 
         self.append_log("[导入] {}: {}".format(title, file_path))
         self.set_status("{}完成".format(title))
@@ -448,7 +472,11 @@ class MainWindow(QMainWindow):
         )
         self.case_data["cuff_result"] = result
 
-        self.viewer_panel.show_algorithm_result("cuff_result", result)
+        self.viewer_panel.show_algorithm_result(
+            "cuff_result",
+            result,
+            display_type=self.case_data.get("cuff_display_type", "reference_boundary")
+        )
         self.append_log("[完成] 袖口识别/边界定位完成: {}".format(result))
         self.set_status("袖口识别/边界定位完成")
 
@@ -461,6 +489,14 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "输入不完整", "请先导入标准基台模型。")
             return
 
+        if not self.case_data["roi_indices_json"]:
+            QMessageBox.warning(self, "输入不完整", "请先导入 ROI 索引文件。")
+            return
+
+        if not self.case_data["cuff_result"] or self.case_data["cuff_result"].get("status") != "success":
+            QMessageBox.warning(self, "流程未完成", "请先完成袖口识别并生成参考边界。")
+            return
+
         params = self.control_panel.get_abutment_design_params()
         self.append_log("[处理] 开始执行个性化基台形态生成...")
         self.append_log(f"[参数] 基台设计参数: {params}")
@@ -468,9 +504,12 @@ class MainWindow(QMainWindow):
 
         result = self.abutment_designer.run(
             standard_abutment_path=self.case_data["standard_abutment"],
+            roi_indices_json_path=self.case_data["roi_indices_json"],
             match_result=self.case_data["match_result"],
             cuff_result=self.case_data["cuff_result"],
             params=params,
+            gingiva_mesh_path=self.case_data.get("gingiva_mesh"),
+            log_callback=self.append_log,
         )
         self.case_data["abutment_result"] = result
 
@@ -541,3 +580,13 @@ class MainWindow(QMainWindow):
 
     def set_status(self, text: str):
         self.status_label.setText(text)
+
+    @Slot(str)
+    def on_cuff_display_type_changed(self, display_type: str):
+        self.case_data["cuff_display_type"] = display_type
+        self.append_log("[显示] 袖口边界显示类型切换为: {}".format(display_type))
+
+        cuff_result = self.case_data.get("cuff_result")
+        if cuff_result and cuff_result.get("status") == "success":
+            self.viewer_panel.update_cuff_result_display(cuff_result, display_type)
+            self.set_status("已切换袖口边界显示类型")

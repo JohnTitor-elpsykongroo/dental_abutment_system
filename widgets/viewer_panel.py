@@ -196,8 +196,8 @@ class ViewerPanel(QWidget):
         # 兼容你之前 main_window 里的旧调用
         self.load_model(key, file_path)
 
-    def show_algorithm_result(self, result_key: str, result):
-        self._append_result_text(self._format_result_text(result_key, result))
+    def show_algorithm_result(self, result_key: str, result, display_type: str = None):
+        self._append_result_text(self._format_result_text(result_key, result, display_type))
 
         if not isinstance(result, dict):
             return
@@ -216,9 +216,10 @@ class ViewerPanel(QWidget):
 
 
         elif result_key == "cuff_result":
-            boundary_display_path = output.get("boundary_display_path")
-            if boundary_display_path and os.path.exists(boundary_display_path):
-                self.load_model("cuff_result", boundary_display_path, display_name="袖口边缘顶点")
+
+            actual_display_type = display_type or result.get("params", {}).get("display_result_type",
+                                                                               "reference_boundary")
+            self.update_cuff_result_display(result, actual_display_type)
 
         elif result_key == "abutment_result":
             model_path = output.get("output_model_path")
@@ -460,6 +461,27 @@ class ViewerPanel(QWidget):
             )
         )
 
+    def update_cuff_result_display(self, result: dict, display_type: str = "reference_boundary"):
+        if not isinstance(result, dict):
+            return
+
+        if result.get("status") != "success":
+            return
+
+        output = result.get("output", {})
+        if not isinstance(output, dict):
+            return
+
+        if display_type == "raw_boundary":
+            candidate = output.get("boundary_display_path")
+            display_name = "原始边界"
+        else:
+            candidate = output.get("reference_display_path")
+            display_name = "参考边界"
+
+        if candidate and os.path.exists(candidate):
+            self.load_model("cuff_result", candidate, display_name=display_name)
+
     # ============================================================
     # 内部逻辑
     # ============================================================
@@ -597,7 +619,7 @@ class ViewerPanel(QWidget):
             self.model_list.addItem(item)
             self.model_items[key] = item
 
-    def _format_result_text(self, result_key: str, result):
+    def _format_result_text(self, result_key: str, result, display_type: str = None):
         lines = []
         lines.append("[结果] {}".format(self.DISPLAY_NAME_MAP.get(result_key, result_key)))
 
@@ -618,12 +640,23 @@ class ViewerPanel(QWidget):
                 lines.append("SC2 保留对应数：{}".format(output.get("num_corr_sc2")))
 
 
+
             elif result_key == "cuff_result":
+
+                actual_display_type = display_type or result.get("params", {}).get("display_result_type",
+                                                                                   "reference_boundary")
+                display_name = "原始边界" if actual_display_type == "raw_boundary" else "参考边界"
+                display_path = (
+                    output.get("boundary_display_path")
+                    if actual_display_type == "raw_boundary"
+                    else output.get("reference_display_path")
+                )
                 lines.append("边界环数量：{}".format(output.get("loop_count")))
                 lines.append("选中边界环编号：{}".format(output.get("selected_loop_id")))
                 lines.append("原始边界点数量：{}".format(output.get("boundary_point_count")))
                 lines.append("参考边界点数量：{}".format(output.get("reference_point_count")))
-                lines.append("显示边界文件：{}".format(output.get("boundary_display_path")))
+                lines.append("当前显示类型：{}".format(display_name))
+                lines.append("界面显示文件：{}".format(display_path))
                 lines.append("参考边界文件：{}".format(output.get("reference_curve_path")))
 
             elif result_key == "abutment_result":
