@@ -1,6 +1,5 @@
 # ui/main_window.py
 import os
-import numpy as np
 
 from pathlib import Path
 
@@ -27,9 +26,9 @@ from modules.scanbody_matcher import ScanbodyMatcher
 from modules.cuff_segmenter import CuffSegmenter
 from modules.abutment_designer import AbutmentDesigner
 from modules.export_manager import ExportManager
+from modules.workflow_controller import DentalDesignWorkflow
 
-from utils.app_config import INTERNAL_CUFF_MODEL_PATH, RUNTIME_OUTPUT_DIR
-from utils.geometry_transform import transform_geometry_file
+from utils.app_config import INTERNAL_CUFF_MODEL_PATH
 
 class MainWindow(QMainWindow):
     """
@@ -46,31 +45,18 @@ class MainWindow(QMainWindow):
         self.resize(1600, 900)
 
         # 数据状态缓存：后续算法模块从这里取输入
-        self.case_data = {
-            "standard_scanbody": None,
-            "standard_abutment": None,
-            "roi_indices_json": None,
-            # 原始输入
-            "oral_scanbody_raw": None,
-            "gingiva_mesh_raw": None,
-            "cuff_data_raw": None,
-
-            # 当前工作数据（初始等于 raw，匹配后更新为变换后结果）
-            "oral_scanbody": None,
-            "gingiva_mesh": None,
-            "cuff_data": None,
-
-            "match_result": None,
-            "cuff_result": None,
-            "abutment_result": None,
-            "cuff_display_type": "reference_boundary",
-        }
-
-        # 初始化算法模块（当前为占位实现）
+        # 初始化算法模块
         self.scanbody_matcher = ScanbodyMatcher()
         self.cuff_segmenter = CuffSegmenter()
         self.abutment_designer = AbutmentDesigner()
         self.export_manager = ExportManager()
+        self.workflow = DentalDesignWorkflow(
+            scanbody_matcher=self.scanbody_matcher,
+            cuff_segmenter=self.cuff_segmenter,
+            abutment_designer=self.abutment_designer,
+            export_manager=self.export_manager,
+        )
+        self.case_data = self.workflow.create_case_data()
 
         self._init_ui()
         self._init_menu()
@@ -279,9 +265,7 @@ class MainWindow(QMainWindow):
     def _load_internal_cuff_model(self):
         cuff_path = str(INTERNAL_CUFF_MODEL_PATH)
 
-        if os.path.exists(cuff_path):
-            self.case_data["cuff_data_raw"] = cuff_path
-            self.case_data["cuff_data"] = cuff_path
+        if self.workflow.load_internal_cuff(self.case_data, cuff_path):
             self.append_log("[内部数据] 已加载袖口模型: {}".format(cuff_path))
         else:
             self.append_log("[警告] 内部袖口模型不存在: {}".format(cuff_path))
@@ -315,22 +299,16 @@ class MainWindow(QMainWindow):
         if not file_path:
             return
 
-        if key in ["standard_scanbody", "standard_abutment", "roi_indices_json"]:
-            self.case_data[key] = file_path
+        updates = self.workflow.register_import(
+            case_data=self.case_data,
+            key=key,
+            file_path=file_path,
+        )
 
-        # 患者扫描数据同时保存 raw 与当前工作数据
-        elif key == "oral_scanbody":
-            self.case_data["oral_scanbody_raw"] = file_path
-            self.case_data["oral_scanbody"] = file_path
-            self.case_data["match_result"] = None
-
+        if updates.get("reset_transformed_views"):
             self.viewer_panel.set_model_visibility("oral_scanbody_in_standard", False)
             self.data_panel.set_visibility_state("oral_scanbody_in_standard", False)
             self.data_panel.set_checkbox_enabled("oral_scanbody_in_standard", False)
-
-        elif key == "gingiva_mesh":
-            self.case_data["gingiva_mesh_raw"] = file_path
-            self.case_data["gingiva_mesh"] = file_path
 
         self.data_panel.update_file_status(key, file_path)
 
@@ -347,8 +325,9 @@ class MainWindow(QMainWindow):
     # =========================
     @Slot()
     def run_scanbody_matching(self):
-        if not self.case_data["standard_scanbody"] or not self.case_data["oral_scanbody_raw"]:
-            QMessageBox.warning(self, "输入不完整", "请先导入标准扫描杆模型和口扫扫描杆模型。")
+        validation_error = self.workflow.validate_before_match(self.case_data)
+        if validation_error:
+            QMessageBox.warning(self, "输入不完整", validation_error)
             return
 
         params = self.control_panel.get_scanbody_match_params()
@@ -356,86 +335,46 @@ class MainWindow(QMainWindow):
         self.append_log(f"[参数] 匹配参数: {params}")
         self.set_status("正在执行扫描杆匹配")
 
-        result = self.scanbody_matcher.run(
-            standard_scanbody_path=self.case_data["standard_scanbody"],
-            oral_scanbody_path=self.case_data["oral_scanbody_raw"],
+        workflow_result = self.workflow.run_scanbody_matching(
+            case_data=self.case_data,
             params=params,
             log_callback=self.append_log,
         )
-
-        self.case_data["match_result"] = result
-        # self.viewer_panel.show_algorithm_result("match_result", result)
+        result = workflow_result["result"]
+        transformed_outputs = workflow_result["transformed_outputs"]
 
         if result.get("status") == "success":
             self.append_log("[完成] 扫描杆匹配完成")
 
-            T_inv = result["output"].get("inverse_transformation")
+            T_inv = result.get("output", {}).get("inverse_transformation")
             self.append_log("[结果] 最终变换矩阵: {}".format(result["output"]["transformation"]))
             self.append_log("[结果] 逆变换矩阵: {}".format(T_inv))
 
-            if T_inv is not None:
-                T_inv = np.asarray(T_inv, dtype=float)
+            oral_out = transformed_outputs.get("oral_scanbody_in_standard")
+            if oral_out:
+                self.viewer_panel.load_model(
+                    "oral_scanbody_in_standard",
+                    oral_out,
+                    display_name="变换后患者扫描杆"
+                )
+                self.data_panel.set_checkbox_enabled("oral_scanbody_in_standard", True)
+                self.data_panel.set_visibility_state("oral_scanbody_in_standard", True)
+                self.sync_model_visibility("oral_scanbody", False)
 
-                # 运行时输出路径
-                oral_out = str(RUNTIME_OUTPUT_DIR / "oral_scanbody_in_standard.ply")
-                gingiva_out = str(RUNTIME_OUTPUT_DIR / "gingiva_mesh_in_standard.ply")
+            gingiva_out = transformed_outputs.get("gingiva_mesh_in_standard")
+            if gingiva_out:
+                self.viewer_panel.load_model(
+                    "gingiva_mesh_in_standard",
+                    gingiva_out,
+                    display_name="变换后患者牙齿模型"
+                )
+                self.data_panel.set_checkbox_enabled("gingiva_mesh_in_standard", True)
+                self.data_panel.set_visibility_state("gingiva_mesh_in_standard", True)
+                self.sync_model_visibility("gingiva_mesh", False)
 
-                # 输出后缀尽量保持与原始输入一致
-                if self.case_data.get("oral_scanbody_raw"):
-                    oral_ext = os.path.splitext(self.case_data["oral_scanbody_raw"])[1]
-                    if oral_ext:
-                        oral_out = str(RUNTIME_OUTPUT_DIR / ("oral_scanbody_in_standard" + oral_ext))
-
-                if self.case_data.get("gingiva_mesh_raw"):
-                    gingiva_ext = os.path.splitext(self.case_data["gingiva_mesh_raw"])[1]
-                    if gingiva_ext:
-                        gingiva_out = str(RUNTIME_OUTPUT_DIR / ("gingiva_mesh_in_standard" + gingiva_ext))
-
-                # 1. 患者扫描杆：生成新的变换后模型，更新工作数据，并在界面显示
-                if self.case_data.get("oral_scanbody_raw"):
-                    oral_out = transform_geometry_file(
-                        self.case_data["oral_scanbody_raw"],
-                        oral_out,
-                        T_inv
-                    )
-                    self.case_data["oral_scanbody"] = oral_out
-                    self.viewer_panel.load_model(
-                        "oral_scanbody_in_standard",
-                        oral_out,
-                        display_name="变换后患者扫描杆"
-                    )
-                    self.data_panel.set_checkbox_enabled("oral_scanbody_in_standard", True)
-                    self.data_panel.set_visibility_state("oral_scanbody_in_standard", True)
-                    self.sync_model_visibility("oral_scanbody", False)
-
-                # 2. 患者牙齿模型：生成新的变换后模型，更新工作数据，并在界面显示
-                if self.case_data.get("gingiva_mesh_raw"):
-                    gingiva_out = transform_geometry_file(
-                        self.case_data["gingiva_mesh_raw"],
-                        gingiva_out,
-                        T_inv
-                    )
-                    self.case_data["gingiva_mesh"] = gingiva_out
-                    self.viewer_panel.load_model(
-                        "gingiva_mesh_in_standard",
-                        gingiva_out,
-                        display_name="变换后患者牙齿模型"
-                    )
-                    self.data_panel.set_checkbox_enabled("gingiva_mesh_in_standard", True)
-                    self.data_panel.set_visibility_state("gingiva_mesh_in_standard", True)
-                    self.sync_model_visibility("gingiva_mesh", False)
-
-                # 3. 袖口模型：仅内部变换并更新工作数据，不在界面显示
-                if self.case_data.get("cuff_data_raw"):
-                    cuff_ext = os.path.splitext(self.case_data["cuff_data_raw"])[1]
-                    cuff_out = str(RUNTIME_OUTPUT_DIR / ("cuff_data_in_standard" + cuff_ext))
-                    cuff_out = transform_geometry_file(
-                        self.case_data["cuff_data_raw"],
-                        cuff_out,
-                        T_inv
-                    )
-                    self.case_data["cuff_data"] = cuff_out
-                    self.append_log("[内部数据] 袖口模型已完成坐标变换: {}".format(cuff_out))
+            cuff_out = transformed_outputs.get("cuff_data_in_standard")
+            if cuff_out:
+                self.append_log("[内部数据] 袖口模型已完成坐标变换: {}".format(cuff_out))
 
             self.set_status("扫描杆匹配完成")
         else:
@@ -447,16 +386,9 @@ class MainWindow(QMainWindow):
     # =========================
     @Slot()
     def run_cuff_segmentation(self):
-        if not self.case_data["gingiva_mesh"]:
-            QMessageBox.warning(self, "输入不完整", "请先导入患者牙齿模型。")
-            return
-
-        if not self.case_data["cuff_data"]:
-            QMessageBox.warning(self, "输入不完整", "程序内部袖口模型未加载成功。")
-            return
-
-        if not self.case_data["match_result"]:
-            QMessageBox.warning(self, "流程未完成", "请先执行扫描杆匹配。")
+        validation_error = self.workflow.validate_before_cuff(self.case_data)
+        if validation_error:
+            QMessageBox.warning(self, "流程未完成", validation_error)
             return
 
         params = self.control_panel.get_cuff_params()
@@ -464,13 +396,11 @@ class MainWindow(QMainWindow):
         self.append_log("[参数] 袖口参数: {}".format(params))
         self.set_status("正在执行袖口识别/边界定位")
 
-        result = self.cuff_segmenter.run(
-            gingiva_mesh_path=self.case_data["gingiva_mesh"],
-            cuff_data_path=self.case_data["cuff_data"],
+        result = self.workflow.run_cuff_segmentation(
+            case_data=self.case_data,
             params=params,
             log_callback=self.append_log,
         )
-        self.case_data["cuff_result"] = result
 
         self.viewer_panel.show_algorithm_result(
             "cuff_result",
@@ -485,16 +415,9 @@ class MainWindow(QMainWindow):
     # =========================
     @Slot()
     def run_abutment_design(self):
-        if not self.case_data["standard_abutment"]:
-            QMessageBox.warning(self, "输入不完整", "请先导入标准基台模型。")
-            return
-
-        if not self.case_data["roi_indices_json"]:
-            QMessageBox.warning(self, "输入不完整", "请先导入 ROI 索引文件。")
-            return
-
-        if not self.case_data["cuff_result"] or self.case_data["cuff_result"].get("status") != "success":
-            QMessageBox.warning(self, "流程未完成", "请先完成袖口识别并生成参考边界。")
+        validation_error = self.workflow.validate_before_design(self.case_data)
+        if validation_error:
+            QMessageBox.warning(self, "流程未完成", validation_error)
             return
 
         params = self.control_panel.get_abutment_design_params()
@@ -502,16 +425,11 @@ class MainWindow(QMainWindow):
         self.append_log(f"[参数] 基台设计参数: {params}")
         self.set_status("正在执行个性化基台形态生成")
 
-        result = self.abutment_designer.run(
-            standard_abutment_path=self.case_data["standard_abutment"],
-            roi_indices_json_path=self.case_data["roi_indices_json"],
-            match_result=self.case_data["match_result"],
-            cuff_result=self.case_data["cuff_result"],
+        result = self.workflow.run_abutment_design(
+            case_data=self.case_data,
             params=params,
-            gingiva_mesh_path=self.case_data.get("gingiva_mesh"),
             log_callback=self.append_log,
         )
-        self.case_data["abutment_result"] = result
 
         self.viewer_panel.show_algorithm_result("abutment_result", result)
         self.append_log(f"[完成] 个性化基台形态生成完成: {result}")
@@ -540,10 +458,7 @@ class MainWindow(QMainWindow):
         if not export_root_dir:
             return
 
-        result = self.export_manager.export_case_results(
-            case_data=self.case_data,
-            export_root_dir=export_root_dir,
-        )
+        result = self.workflow.export_results(case_data=self.case_data, export_root_dir=export_root_dir)
 
         if result.get("success"):
             self.append_log("[导出] 结果已导出到目录: {}".format(result["export_dir"]))
