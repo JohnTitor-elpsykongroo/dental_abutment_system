@@ -123,7 +123,7 @@ class DataPanel(QWidget):
         btn_match = QPushButton("1. 执行扫描杆匹配")
         btn_cuff = QPushButton("2. 执行袖口识别 / 边界定位")
         btn_design = QPushButton("3. 执行基台形态生成")
-        btn_export = QPushButton("4. 导出结果模型")
+        btn_export = QPushButton("4. 导出结果")
 
         btn_match.clicked.connect(self.run_matching_requested.emit)
         btn_cuff.clicked.connect(self.run_cuff_requested.emit)

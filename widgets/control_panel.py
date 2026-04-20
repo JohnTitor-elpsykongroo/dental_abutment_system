@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QTabWidget,
     QComboBox,
+    QHBoxLayout,
 )
 
 
@@ -50,7 +51,7 @@ class ControlPanel(QWidget):
         self.match_voxel_size.setValue(0.30)
 
         self.match_ransac_iter = QSpinBox()
-        self.match_ransac_iter.setRange(100, 100000)
+        self.match_ransac_iter.setRange(100, 1000000)
         self.match_ransac_iter.setValue(4000)
 
         self.match_distance_thresh = QDoubleSpinBox()
@@ -144,8 +145,9 @@ class ControlPanel(QWidget):
         widget = QWidget()
         layout = QVBoxLayout(widget)
 
-        group = QGroupBox("个性化基台形态生成参数")
-        form = QFormLayout(group)
+        # ---------- 基础形变参数 ----------
+        group_basic = QGroupBox("个性化基台形态生成参数")
+        form_basic = QFormLayout(group_basic)
 
         self.design_emergence_height = QDoubleSpinBox()
         self.design_emergence_height.setRange(0.0, 10.0)
@@ -161,17 +163,62 @@ class ControlPanel(QWidget):
         self.design_smooth_weight.setRange(0.0, 100.0)
         self.design_smooth_weight.setDecimals(3)
         self.design_smooth_weight.setValue(10.0)
+        self.design_smooth_weight.setEnabled(False)  # 当前算法未实际使用，先保留展示
 
         self.design_export_intermediate = QCheckBox("导出中间结果")
-        self.design_export_intermediate.setChecked(False)
+        self.design_export_intermediate.setChecked(True)
 
-        form.addRow("穿龈高度", self.design_emergence_height)
-        form.addRow("穿龈压迫量", self.design_pressure_offset)
-        form.addRow("平滑约束权重", self.design_smooth_weight)
-        form.addRow("", self.design_export_intermediate)
+        form_basic.addRow("穿龈高度", self.design_emergence_height)
+        form_basic.addRow("穿龈压迫量", self.design_pressure_offset)
+        form_basic.addRow("平滑约束权重", self.design_smooth_weight)
+        form_basic.addRow("", self.design_export_intermediate)
 
-        layout.addWidget(group)
+        # ---------- 控制线自动构造参数 ----------
+        group_control = QGroupBox("控制区域与控制线构造参数")
+        form_control = QFormLayout(group_control)
+
+        self.design_outer_radius_tol = QDoubleSpinBox()
+        self.design_outer_radius_tol.setRange(0.0001, 10.0)
+        self.design_outer_radius_tol.setDecimals(4)
+        self.design_outer_radius_tol.setValue(0.01)
+
+        self.design_outer_z_tol = QDoubleSpinBox()
+        self.design_outer_z_tol.setRange(0.0001, 10.0)
+        self.design_outer_z_tol.setDecimals(4)
+        self.design_outer_z_tol.setValue(0.01)
+
+        self.design_epsilon = QDoubleSpinBox()
+        self.design_epsilon.setRange(1e-8, 1e-2)
+        self.design_epsilon.setDecimals(8)
+        self.design_epsilon.setSingleStep(1e-6)
+        self.design_epsilon.setValue(1e-6)
+
+        form_control.addRow("外圈半径阈值", self.design_outer_radius_tol)
+        form_control.addRow("上下圈 Z 阈值", self.design_outer_z_tol)
+        form_control.addRow("数值稳定项", self.design_epsilon)
+
+        # ---------- 中心点参数 ----------
+        group_center = QGroupBox("极角参考中心点")
+        center_layout = QHBoxLayout(group_center)
+
+        self.design_center_x = QDoubleSpinBox()
+        self.design_center_y = QDoubleSpinBox()
+        self.design_center_z = QDoubleSpinBox()
+
+        for spin in [self.design_center_x, self.design_center_y, self.design_center_z]:
+            spin.setRange(-1000.0, 1000.0)
+            spin.setDecimals(4)
+            spin.setValue(0.0)
+
+        center_layout.addWidget(self.design_center_x)
+        center_layout.addWidget(self.design_center_y)
+        center_layout.addWidget(self.design_center_z)
+
+        layout.addWidget(group_basic)
+        layout.addWidget(group_control)
+        layout.addWidget(group_center)
         layout.addStretch(1)
+
         return widget
 
     # ============================================================
@@ -193,7 +240,6 @@ class ControlPanel(QWidget):
             "reference_smooth_factor": self.cuff_reference_smooth_factor.value(),
             "reference_spline_degree": self.cuff_reference_spline_degree.value(),
             "display_offset_on_gingiva": self.cuff_display_offset.value(),
-            "display_result_type": self.cuff_display_result_type.currentText(),
             "save_outputs": self.cuff_save_outputs.isChecked(),
         }
 
@@ -203,4 +249,13 @@ class ControlPanel(QWidget):
             "pressure_offset": self.design_pressure_offset.value(),
             "smooth_weight": self.design_smooth_weight.value(),
             "export_intermediate": self.design_export_intermediate.isChecked(),
+
+            "outer_radius_tol": self.design_outer_radius_tol.value(),
+            "outer_z_tol": self.design_outer_z_tol.value(),
+            "epsilon": self.design_epsilon.value(),
+            "center_point": [
+                self.design_center_x.value(),
+                self.design_center_y.value(),
+                self.design_center_z.value(),
+            ],
         }

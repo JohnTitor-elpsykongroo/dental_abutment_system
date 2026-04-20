@@ -137,7 +137,7 @@ class MainWindow(QMainWindow):
         action_import_oral_scanbody = QAction("导入口扫扫描杆模型", self)
         action_import_gingiva = QAction("导入完整牙龈模型", self)
         action_import_cuff = QAction("导入袖口相关数据", self)
-        action_export_result = QAction("导出结果模型", self)
+        action_export_result = QAction("导出结果", self)
         action_exit = QAction("退出", self)
 
         file_menu.addAction(action_import_std_scanbody)
@@ -522,30 +522,48 @@ class MainWindow(QMainWindow):
     # =========================
     @Slot()
     def export_result_model(self):
-        if not self.case_data["abutment_result"]:
-            QMessageBox.information(self, "暂无结果", "当前没有可导出的结果模型。")
+        has_any_result = any([
+            self.case_data.get("match_result"),
+            self.case_data.get("cuff_result"),
+            self.case_data.get("abutment_result"),
+        ])
+
+        if not has_any_result:
+            QMessageBox.information(self, "暂无结果", "当前没有可导出的结果。")
             return
 
-        save_path, _ = QFileDialog.getSaveFileName(
+        export_root_dir = QFileDialog.getExistingDirectory(
             self,
-            "导出结果模型",
-            str(Path.home() / "abutment_result.ply"),
-            "PLY Files (*.ply);;STL Files (*.stl);;OBJ Files (*.obj)"
+            "选择结果导出目录",
+            str(Path.home())
         )
-        if not save_path:
+        if not export_root_dir:
             return
 
-        success = self.export_manager.export_model(
-            result=self.case_data["abutment_result"],
-            save_path=save_path
+        result = self.export_manager.export_case_results(
+            case_data=self.case_data,
+            export_root_dir=export_root_dir,
         )
 
-        if success:
-            self.append_log(f"[导出] 结果模型已导出: {save_path}")
+        if result.get("success"):
+            self.append_log("[导出] 结果已导出到目录: {}".format(result["export_dir"]))
+            self.append_log("[导出] 导出模块: {}".format(result["exported_modules"]))
+            self.append_log("[导出] 导出文件数: {}".format(result["exported_file_count"]))
+
+            warnings = result.get("warnings", [])
+            for warning in warnings:
+                self.append_log("[导出][提示] {}".format(warning))
+
             self.set_status("结果导出完成")
+            QMessageBox.information(
+                self,
+                "导出完成",
+                "结果已导出到：\n{}".format(result["export_dir"])
+            )
         else:
             self.append_log("[错误] 结果导出失败")
             self.set_status("结果导出失败")
+            QMessageBox.warning(self, "导出失败", "结果导出失败。")
 
     # =========================
     # 显示 / 隐藏
